@@ -1,7 +1,7 @@
 from redditnlp import RedditWordCounter, TfidfCorpus
 import urllib
 import os
-from collections import deque
+from collections import deque, Counter
 
 ######################
 # SETTINGS
@@ -33,6 +33,8 @@ def ticker_filter(item_to_filter):
         return False
 
 def get_subreddit_vocabularies():
+    # Initialize a summary vocabulary for TF-IDF meta-analysis
+    summary_vocabulary = Counter()
     # Initialise Reddit word counter instance
     reddit_counter = RedditWordCounter(USERNAME, CLIENT_SECRET)
 
@@ -53,8 +55,18 @@ def get_subreddit_vocabularies():
             subreddit_queue.append(subreddit)
             continue
 
+        # Append the vocabulary to the summary document
+        for itm in vocabulary:
+            if itm in summary_vocabulary:
+                summary_vocabulary[itm]=summary_vocabulary[itm] + vocabulary[itm]
+            else:
+                summary_vocabulary[itm]=vocabulary[itm]
+
         comment_corpus.add_document(vocabulary, subreddit)
         comment_corpus.save()
+
+    comment_corpus.add_document(summary_vocabulary,"summary")
+    comment_corpus.save()
 
     return comment_corpus, corpus_path
 

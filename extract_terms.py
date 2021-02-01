@@ -11,7 +11,7 @@ USERNAME = '6WrnXsVcLIA2Fw' #'hapinator1954'  # Change this to your username
 CLIENT_SECRET = 'fGUKP3WyXgIyymflYLHQvBrehLPt0g'
 SAVE_DIR = 'tfidf_corpus'
 CORPUS_FILE = 'corpus.json'
-COMMENTS_PER_SUBREDDIT = 10
+COMMENTS_PER_SUBREDDIT = 100
 SUBREDDITS = [
     'wallstreetbets','thetagang','robinhoodpennystocks','YOLO'
 ]
@@ -56,22 +56,31 @@ def get_subreddit_vocabularies():
             continue
 
         # Append the vocabulary to the summary document
-        summary_vocabulary.update(vocabulary)
+        for itm in vocabulary:
+            if itm in summary_vocabulary:
+                summary_vocabulary[itm]=summary_vocabulary[itm] + vocabulary[itm]
+            else:
+                summary_vocabulary[itm]=vocabulary[itm]
 
         comment_corpus.add_document(vocabulary, subreddit)
         comment_corpus.save()
 
-    # Finalize and calculate the summary vocabulary
-    final_summary=Counter()
-    for key, value in summary_vocabulary.items():
-        if key not in final_summary:
-            final_summary[key] = value
-        else:
-            final_summary[key] += value
-    comment_corpus.append_document(final_summary, 'summary')
+    comment_corpus.add_document(summary_vocabulary,"summary")
+    comment_corpus.save()
 
     return comment_corpus, corpus_path
 
+def save_subreddit_term_summary(corpus, num_terms=500):
+    summary_path = os.path.join(SAVE_DIR, 'summarized_top_words.txt')
+    top_terms = corpus.get_all_terms(num_terms)
+    top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
+
+    with open(summary_path, 'a', encoding="utf-8") as f:
+        f.write(
+            'summary\n' +
+            '\n'.join(['{0},{1}'.format(term, weight) for term, weight in top_terms]) +
+            '\n\n')
+    return summary_path
 
 def save_subreddit_top_terms(corpus, num_terms=500):
     # Save the top terms for each subreddit in a text file
@@ -91,16 +100,13 @@ def save_subreddit_top_terms(corpus, num_terms=500):
                  '\n\n')
 
     # sum(corpus.corpus.get('reddit').values())
-    top_terms = corpus.get_top_terms(document, num_terms)
+    top_terms = corpus.get_top_terms('summary', num_terms)
     top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
-    for itm in corpus.corpus:
-        summary[itm]=sum(corpus.corpus.get(itm).values())
 
-    summary = sorted(summary.items(), key=lambda x: x[1], reverse=True)
     with open(summary_path, 'a', encoding="utf-8") as f:
         f.write(
             'summary\n' +
-             '\n'.join(['{0},{1}'.format(term,weight) for term,weight in summary]) +
+             '\n'.join(['{0},{1}'.format(term,weight) for term,weight in top_terms]) +
              '\n\n')
     return save_path
 
@@ -144,8 +150,12 @@ corpus, corpus_path = get_subreddit_vocabularies()
 print ('TF-IDF corpus saved to %s' % corpus_path)
 
 # Get the top words by subreddit
-top_terms_path = save_subreddit_top_terms(corpus,10)
+top_terms_path = save_subreddit_top_terms(corpus,30)
 print ('Top terms saved to %s' % corpus_path)
+
+# Get the ensemble terms
+summary_path = save_subreddit_term_summary(corpus,50)
+print ('Top terms saved to %s' % summary_path)
 
 # Get the swearword frequency
 swearword_frequency = get_swearword_counts(corpus)

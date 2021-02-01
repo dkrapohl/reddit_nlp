@@ -561,6 +561,23 @@ class TfidfCorpus(object):
             ,key=operator.itemgetter(1), reverse=True)
         return OrderedDict(sorted_tfidfs[:num_terms])
 
+    def get_all_terms(self, num_terms=30):
+        """Get the top terms for a given document by tf-idf score.
+
+        :param document_name: string indicating document's name in the corpus - should exist in self.document_list
+        :param num_terms: number of top terms to return (30 by default)
+        :return: dict of top terms and their corresponding tf-idf scores
+        """
+        all_dict={}
+        for document in self.get_document_list():
+            tfidfs = self.get_document_tfidfs(document)
+            all_dict.update(tfidfs)
+
+        sorted_tfidfs = sorted(
+            filter(self.noise_filter, all_dict.items())
+            ,key=operator.itemgetter(1), reverse=True)
+        return OrderedDict(sorted_tfidfs[:num_terms])
+
     def noise_filter(self, item_to_filter):
         if len(item_to_filter[0])<5\
                 and not (item_to_filter[0][0]).isdigit()\
