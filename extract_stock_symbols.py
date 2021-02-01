@@ -1,7 +1,7 @@
 from redditnlp import RedditWordCounter, TfidfCorpus
 import urllib
 import os
-from collections import deque, Counter
+from collections import deque
 
 ######################
 # SETTINGS
@@ -11,7 +11,7 @@ USERNAME = '6WrnXsVcLIA2Fw' #'hapinator1954'  # Change this to your username
 CLIENT_SECRET = 'fGUKP3WyXgIyymflYLHQvBrehLPt0g'
 SAVE_DIR = 'tfidf_corpus'
 CORPUS_FILE = 'corpus.json'
-COMMENTS_PER_SUBREDDIT = 10
+COMMENTS_PER_SUBREDDIT = 1000
 SUBREDDITS = [
     'wallstreetbets','thetagang','robinhoodpennystocks','YOLO'
 ]
@@ -33,8 +33,6 @@ def ticker_filter(item_to_filter):
         return False
 
 def get_subreddit_vocabularies():
-    # Initialize a summary vocabulary for TF-IDF meta-analysis
-    summary_vocabulary = Counter()
     # Initialise Reddit word counter instance
     reddit_counter = RedditWordCounter(USERNAME, CLIENT_SECRET)
 
@@ -55,34 +53,18 @@ def get_subreddit_vocabularies():
             subreddit_queue.append(subreddit)
             continue
 
-        # Append the vocabulary to the summary document
-        summary_vocabulary.update(vocabulary)
-
         comment_corpus.add_document(vocabulary, subreddit)
         comment_corpus.save()
-
-    # Finalize and calculate the summary vocabulary
-    final_summary=Counter()
-    for key, value in summary_vocabulary.items():
-        if key not in final_summary:
-            final_summary[key] = value
-        else:
-            final_summary[key] += value
-    comment_corpus.append_document(final_summary, 'summary')
 
     return comment_corpus, corpus_path
 
 
-def save_subreddit_top_terms(corpus, num_terms=500):
+def save_subreddit_top_terms(corpus):
     # Save the top terms for each subreddit in a text file
     save_path = os.path.join(SAVE_DIR, 'top_words.txt')
-    summary_path = os.path.join(SAVE_DIR, 'summarized_top_words.txt')
-    summary = Counter()
     for document in corpus.get_document_list():
-        top_terms = corpus.get_top_terms(document, num_terms)
+        top_terms = corpus.get_top_terms(document, num_terms=500)
         top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
-        # tt_counter = Counter(top_terms)
-        # summary = summary + tt_counter
         with open(save_path, 'a', encoding="utf-8") as f:
             f.write(
                 document +  #.encode('utf-8') +
@@ -90,18 +72,6 @@ def save_subreddit_top_terms(corpus, num_terms=500):
                  '\n'.join(['{0}, {1}'.format(term.encode('utf-8'), weight) for term, weight in top_terms]) +
                  '\n\n')
 
-    # sum(corpus.corpus.get('reddit').values())
-    top_terms = corpus.get_top_terms(document, num_terms)
-    top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
-    for itm in corpus.corpus:
-        summary[itm]=sum(corpus.corpus.get(itm).values())
-
-    summary = sorted(summary.items(), key=lambda x: x[1], reverse=True)
-    with open(summary_path, 'a', encoding="utf-8") as f:
-        f.write(
-            'summary\n' +
-             '\n'.join(['{0},{1}'.format(term,weight) for term,weight in summary]) +
-             '\n\n')
     return save_path
 
 def save_subreddit_tickers(corpus):
@@ -144,7 +114,7 @@ corpus, corpus_path = get_subreddit_vocabularies()
 print ('TF-IDF corpus saved to %s' % corpus_path)
 
 # Get the top words by subreddit
-top_terms_path = save_subreddit_top_terms(corpus,10)
+top_terms_path = save_subreddit_top_terms(corpus)
 print ('Top terms saved to %s' % corpus_path)
 
 # Get the swearword frequency
