@@ -1,0 +1,675 @@
+from __future__ import division
+from __future__ import print_function
+
+import os
+import math
+import errno
+import json
+import operator
+import numpy as np
+import praw
+import urllib
+import nltk
+
+from nltk.stem.porter import PorterStemmer
+from collections import Counter, OrderedDict
+from time import time, sleep
+from string import punctuation
+#from praw.handlers import MultiprocessHandler
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.svm import LinearSVC
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.multiclass import OneVsRestClassifier
+
+
+class WordCounter(object):
+    """Performs word counting given an input string.
+
+    Data attributes:
+        stemmer: Porter stemmer used optionally to perform stemming of extracted words
+        stopwords (list): list of stop words used to reject common words such as 'and'
+
+    Methods:
+        tokenize
+        get_word_count
+        remove_punctuation
+        remove_stopwords
+        stem_tokens: perform Porter stemming on a list of words
+    """
+
+    def __init__(self):
+        self.stemmer = PorterStemmer()
+
+        # Load stop-words
+        application_root = os.path.dirname(__file__)
+        stopwords = os.path.join(application_root, 'words/stopwords_english.txt')
+        with open(stopwords, 'r') as stopwords_file:
+            self.stopwords = [word.strip('\n') for word in stopwords_file.readlines()]
+
+        swearwords = os.path.join(application_root, 'words/swearwords_english.txt')
+        with open(swearwords, 'r') as swearwords_file:
+            self.swearwords = [word.strip('\n') for word in swearwords_file.readlines()]
+
+    def tokenize(self, text):
+        """Tokenize an input string into a list of words (with punctuation removed)."""
+        text = text.lower()
+        punctuation_removed = self.remove_punctuation(text)
+        tokens = nltk.word_tokenize(punctuation_removed)
+        return tokens
+
+    def get_word_count(self, text, stop_words=True, stemming=False):
+        """Return a dict (Counter) of words and corresponding counts given an input string."""
+        tokens = self.tokenize(text)
+
+        # Remove stop words
+        if stop_words:
+            tokens = self.remove_stopwords(tokens)
+
+        tokens = self.remove_swearwords(tokens)
+
+        if stemming:
+            tokens = self.stem_tokens(tokens)
+
+        return Counter(tokens)
+
+    @staticmethod
+    def remove_punctuation(text, replacement=' ', exclude="'"):
+        """Remove punctuation from an input string."""
+        text = text.replace("'", "")  # Single quote always stripped out
+        for p in set(list(punctuation)) - set(list(exclude)):
+            text = text.replace(p, replacement)
+
+        text = ' '.join(text.split())  # Remove excess whitespace
+        return text
+
+    def remove_stopwords(self, tokens):
+        """Remove all stopwords from a list of word tokens."""
+        return [word for word in tokens if word not in self.stopwords]
+
+    def remove_swearwords(self, tokens):
+        """Remove all stopwords from a list of word tokens."""
+        return [word for word in tokens if word not in self.swearwords]
+
+    def stem_tokens(self, tokens):
+        """Perform porter stemming on a list of word tokens."""
+        return [self.stemmer.stem(word) for word in tokens]
+
+    def count_words_from_list(self, text, word_list, normalize=True):
+        """Count the number of times the words from a given list appear in text."""
+        text = self.tokenize(text)
+        count = sum([1 for word in text if word in word_list])
+        if normalize:
+            count /= len(text)
+        return count
+
+
+class RedditWordCounter(WordCounter):
+    """Performs word counting of comments and titles in Reddit using the Reddit API.
+
+    To initialise a new RedditWordCounter instance:
+    >>> counter = RedditWordCounter('your_username')
+
+    To adhere to the Reddit API rules, please provide your Reddit username in place of 'your_username' above.
+    This will ensure that the app doesn't get banned from Reddit!
+
+    Data Attributes:
+        user_agent (str): required to connect to Reddit
+        reddit: instance of the Reddit API connection
+        word_counter: WordCounter object used to perform word counting given input strings
+
+    Methods:
+        subreddit_comments: word count from comments of a given subreddit
+        subreddit_titles: word count from titles of a given subreddit
+        user_comments: word count from comments of a given user
+        check_connection: check that there is a working connection to Reddit
+    """
+
+    def __init__(
+            self,
+            user,
+            secret,
+            multiprocess=False
+    ):
+        """Initialise a RedditWordCounter object.
+
+        :param user: your Reddit username
+        :param multiprocess: if True, will handle requests from multiple RedditWordCounter objects (False by default)
+        :return:
+        """
+        super(RedditWordCounter, self).__init__()  # Initialise the WordCounter class
+        #handler = MultiprocessHandler() if multiprocess else None
+        self.user_agent = 'redditvocab/0.1 bot by {0}'.format(user)
+        self.reddit = praw.Reddit(user_agent=self.user_agent, client_id=user, client_secret=secret, handler=None)
+
+    def subreddit_comments_hot(self, subreddit_name, limit=1000, stemming=False, get_all_comments=False):
+        """Retrieve the vocabulary from the comments of a subreddit.
+
+        :param subreddit_name: name of the subreddit excluding '/r/'
+        :param limit: number of comments to retrieve (1000 by default) - note that at present the limit is approximate
+        :param stemming: if True, performs stemming on tokenized words (False by default)
+        :param get_all_comments: if True, retrieves all comments per submission. Note that this requires descending the
+        comment tree, which drastically increases the number of API calls and reduces performance due to rate-limiting.
+        :return: Counter (dict) of comment vocabulary in the form {'term1': freq, 'term2': freq, ...}
+        """
+
+        def get_vocabulary(comments):
+
+            vocab = Counter()
+            num_comments = 0
+            for comment in comments:
+                if isinstance(comment, praw.reddit.Comment):
+                    try:
+                        # Get the word counts for the comment
+                        vocab += self.get_word_count(comment.body, stemming=stemming)
+                        num_comments += 1
+
+                    except ValueError:
+                        pass
+                '''
+                elif isinstance(comment, praw.objects.MoreComments) and get_all_comments:
+                    new_vocab, num_new_comments = get_vocabulary(comment.comments)
+                    vocab += new_vocab
+                    num_comments += num_new_comments
+                '''
+            return vocab, num_comments
+
+        subreddit = self.reddit.subreddit(subreddit_name)
+
+        # Initialise loop variables
+        vocabulary = Counter()
+        comments_processed = 0
+
+        for submission in subreddit.hot(limit=None):
+            submission_comments = submission.comments.list()  # praw.helpers.flatten_tree(submission.comments)
+
+            # Run over all comments
+            submission_vocabulary, new_comments = get_vocabulary(submission_comments)
+            vocabulary += submission_vocabulary
+            comments_processed += new_comments
+
+            print("Comments processed for subreddit '{0}': {1}".format(subreddit_name, comments_processed), end="\r")
+
+            if limit and comments_processed >= limit:
+                break
+
+        print('\n')
+        return vocabulary
+
+    def subreddit_comments_new(self, subreddit_name, limit=1000, stemming=False, get_all_comments=False):
+        """Retrieve the vocabulary from the comments of a subreddit.
+
+        :param subreddit_name: name of the subreddit excluding '/r/'
+        :param limit: number of comments to retrieve (1000 by default) - note that at present the limit is approximate
+        :param stemming: if True, performs stemming on tokenized words (False by default)
+        :param get_all_comments: if True, retrieves all comments per submission. Note that this requires descending the
+        comment tree, which drastically increases the number of API calls and reduces performance due to rate-limiting.
+        :return: Counter (dict) of comment vocabulary in the form {'term1': freq, 'term2': freq, ...}
+        """
+
+        def get_vocabulary(comments):
+
+            vocab = Counter()
+            num_comments = 0
+            for comment in comments:
+                if isinstance(comment, praw.reddit.Comment):
+                    try:
+                        # Get the word counts for the comment
+                        vocab += self.get_word_count(comment.body, stemming=stemming)
+                        num_comments += 1
+
+                    except ValueError:
+                        pass
+                '''
+                elif isinstance(comment, praw.objects.MoreComments) and get_all_comments:
+                    new_vocab, num_new_comments = get_vocabulary(comment.comments)
+                    vocab += new_vocab
+                    num_comments += num_new_comments
+                '''
+            return vocab, num_comments
+
+        subreddit = self.reddit.subreddit(subreddit_name)
+
+        # Initialise loop variables
+        vocabulary = Counter()
+        comments_processed = 0
+
+        for submission in subreddit.new(limit=None):
+            submission_comments = submission.comments.list()  # praw.helpers.flatten_tree(submission.comments)
+
+            # Run over all comments
+            submission_vocabulary, new_comments = get_vocabulary(submission_comments)
+            vocabulary += submission_vocabulary
+            comments_processed += new_comments
+
+            print("Comments processed for subreddit '{0}': {1}".format(subreddit_name, comments_processed), end="\r")
+
+            if limit and comments_processed >= limit:
+                break
+
+        print('\n')
+        return vocabulary
+
+    def subreddit_titles(self, subreddit_name, limit=1000, stemming=False):
+        """Retrieve the vocabulary from the titles in a subreddit.
+
+        :param subreddit_name: name of the subreddit excluding '/r/'
+        :param limit: number of submissions to process (1000 by default - note that this is the maximum)
+        :param stemming: if True, performs stemming on tokenized words (False by default)
+        :return: Counter (dict) of title vocabulary in the form {'term1': freq, 'term2': freq, ...}
+        """
+
+        subreddit = self.reddit.get_subreddit(subreddit_name)
+
+        # Initialise loop variables
+        vocabulary = Counter()
+        submissions_processed = 0
+
+        for submission in subreddit.get_hot(limit=limit):
+            try:
+                # Update the word counter to include the comment
+                vocabulary += self.get_word_count(submission.title, stemming=stemming)
+                submissions_processed += 1
+
+                if submissions_processed % 100 == 0 or submissions_processed >= limit:
+                    print("Titles processed for subreddit '{0}': {1}".format(subreddit_name, submissions_processed),
+                          end="\r")
+
+            except ValueError:
+                pass
+
+        print('\n')
+        return vocabulary
+
+    def user_comments(self, username, limit=1000, stemming=False):
+        """Retrieve the vocabulary of a user's comments.
+
+        :param username: user's Reddit username excluding '/u/'
+        :param limit: number of comments to process (1000 by default - note that this is the maxmimum)
+        :param stemming: if True, performs stemming on tokenized words (False by default)
+        :return: Counter (dict) of user's vocabulary in the form {'term1': freq, 'term2': freq, ...}
+        """
+        user = self.reddit.redditor(username)
+
+        vocabulary = Counter()
+        comments_processed = 0
+        for comment in user.comments.new(limit=limit):
+            try:
+                # Get the word counts for the comment
+                vocabulary += self.get_word_count(comment.body, stemming=stemming)
+                comments_processed += 1
+
+                if comments_processed % 100 == 0 or comments_processed >= limit:
+                    print("Comments processed for user '{0}': {1}".format(username, comments_processed), end="\r")
+
+            except ValueError:
+                pass
+
+        print('\n')
+        return vocabulary
+
+    def check_connection(self, timeout=10):
+        """Wait for a server response."""
+        header = {'User-Agent': self.user_agent}
+        start = time()
+        while True:
+            try:
+                request = urllib.Request("http://www.reddit.com/", headers=header)
+                response = urllib.urlopen(request)
+                response.read()
+                sleep(2)  # Adhere to Reddit API rule of 30 requests per minute
+                if response.getcode() == 200:
+                    return True
+            except urllib.HTTPError as err:
+                print(err)
+            finally:
+                if time() - start > timeout:
+                    return False
+
+
+class TfidfCorpus(object):
+    """Stores features (e.g. words) and their document frequencies in an inverted index. Useful for NLP and machine
+    learning applications.
+
+    To initialise a new TfidfCorpus instance:
+    >>> corpus = TfidfCorpus()
+
+    By default the corpus will save to 'tfidf_corpus/corpus.json'. You can specify an existing file to load
+    or a specific save path as follows:
+    >>> corpus = TfidfCorpus(corpus_path='path/to/corpus.json')
+
+    Data Attributes:
+        corpus_path (str): save/load path of the corpus
+        document_list (list): list of strings indicating the documents stored in the corpus
+        document_lengths (dict): sum of word frequencies contained in each document, takes the form:
+            {
+                "document1": int,
+                "document2": int,
+                ...
+            }
+        corpus (dict): dict of Counters that takes the form:
+            {
+                "term1": {
+                    "document1": int,
+                    "document2": int
+                },
+                "term2": {
+                    "document1": int,
+                    "document2": int,
+                },
+                ...
+            }
+
+    Methods:
+        save
+        load
+        get_corpus_path
+        get_document_list
+        add_document
+        get_document
+        delete_document
+        append_document
+        get_idf
+        get_tfidf
+        get_document_tfidfs
+        get_top_terms
+        build_feature_matrix
+        train_classifier
+        classify_document
+        count_words_from_list
+        get_mean_word_length
+        check_corpus_path
+    """
+
+    def __init__(self, corpus_path='corpus.json'):
+
+        # Check that the corpus path is valid
+        self.check_corpus_path(corpus_path)
+        self.corpus_path = corpus_path
+        self.document_list = list()
+        self.document_lengths = dict()
+        self.corpus = dict()
+
+        # Initialise scikit-learn attributes
+        self.vectorizer = None
+        self.tfidf_transformer = None
+        self.feature_matrix = None
+        self.classifier = None
+
+        if os.path.isfile(corpus_path):
+            self.load()
+
+
+    def save(self, path=''):
+        """Save the corpus to a JSON file at the path specified in self.corpus_path.
+
+        :param path: you can specify a save path (must end in .json), which will change self.corpus_path
+        """
+        if path:
+            self.check_corpus_path(path)
+            self.corpus_path = path
+
+        with open(self.corpus_path, 'w') as save_file:
+            json.dump(
+                {
+                    'document_list': self.document_list,
+                    'document_lengths': self.document_lengths,
+                    'corpus': self.corpus
+                },
+                save_file
+            )
+
+    def load(self):
+        """Load the corpus from a JSON file. File path defined in self.corpus_path."""
+        with open(self.corpus_path, 'r') as load_file:
+            data = json.load(load_file)
+
+        try:
+            self.document_list = data['document_list']
+            self.document_lengths = data['document_lengths']
+            self.corpus = data['corpus']
+
+            # Make sure that frequency dicts in corpus are Counter objects
+            for term in self.corpus.keys():
+                self.corpus[term] = Counter(self.corpus[term])
+        except KeyError as err:
+            print('Provided file does not have expected structure')
+            raise err
+
+    def get_corpus_path(self):
+        return self.corpus_path
+
+    def set_corpus_path(self, path):
+        if not path.lower().endswith('.json'):
+            raise Exception('Corpus path must be a JSON file (.json extension).')
+        self.corpus_path = path
+
+    def get_document_list(self):
+        return self.document_list
+
+    def get_vocabulary(self):
+        """Return the full list of terms in the corpus."""
+        return self.corpus.keys()
+
+    def get_document(self, document_name):
+        """Retrieve a document from the corpus."""
+        if document_name not in self.document_list:
+            raise Exception("No document with name '{0}' found in corpus".format(document_name))
+        return Counter({
+            term: freqs[document_name] for term, freqs in self.corpus.items() if freqs.get(document_name, 0)
+        })
+
+    def add_document(self, document, document_name):
+        """Load a document into the corpus.
+
+        :param document: takes the form {'term1': freq1, 'term2', freq2, ...}
+        :param document_name: string which uniquely identifies the document
+        """
+        if document_name in self.document_list:
+            print("Document with name '{0}' already exists in corpus."
+                  "Do you wish to replace it?".format(document_name))
+            while True:
+                replace_doc = input("Response (y/n): ")
+                if replace_doc in ['y', 'yes', 'ye']:
+                    self.delete_document(document_name)
+                    break
+                elif replace_doc in ['n', 'no']:
+                    return
+                else:
+                    print('Could not interpret response. Try again.')
+
+        for term, freq in document.items():
+            if not self.corpus.get(term, False):
+                self.corpus[term] = Counter()
+
+            self.corpus[term][document_name] = freq
+
+        self.document_list.append(document_name)
+        self.document_lengths[document_name] = sum(document.values())
+
+    def delete_document(self, document_name):
+        """Delete a document from the corpus.
+
+        :param document_name: string indicating document's name in the corpus - should exist in self.document_list
+        """
+        if document_name not in self.document_list:
+            return
+        [freqs.pop(document_name) for term, freqs in self.corpus.items() if freqs.get(document_name, 0)]
+        self.document_list.remove(document_name)
+        self.document_lengths.pop(document_name)
+
+    def append_document(self, document, document_name):
+        """Add new counts to an existing document. If the document doesn't exist in the corpus then it is added.
+
+        :param document: dict or Counter of word counts, e.g. {'i': 1, 'like': 2, 'cheese': 1}
+        :param document_name: string indicating document's name in the corpus - should exist in self.document_list
+        """
+        if document_name not in self.document_list:
+            self.add_document(document, document_name)
+        else:
+            for term, freq in document.items():
+                if not self.corpus.get(term, False):
+                    self.corpus[term] = Counter()
+
+                self.corpus[term][document_name] += freq
+
+        self.document_lengths[document_name] += sum(document.values())
+
+    def get_idf(self, term):
+        """Get inverse document frequency of a given term in the corpus."""
+        num_documents = len(self.document_list)
+        docs_containing_term = len(self.corpus[term])
+        return num_documents / (1 + docs_containing_term)
+        # return math.log(num_documents / (1 + docs_containing_term))
+
+    def get_tfidf(self, term, document_name):
+        """Get tf-idf score given a term and document in the corpus."""
+        # tf = self.corpus[term].get(document_name, '') / self.document_lengths[document_name]
+        tf = self.corpus[term][document_name] / self.document_lengths[document_name]
+        idf = self.get_idf(term)
+        return tf * idf
+
+    def get_document_tfidfs(self, document_name, l2_norm=True):
+        """Get tf-idf scores for all terms in a document.
+
+        :param document_name: string indicating document's name in the corpus - should exist in self.document_list
+        :param l2_norm: if True, applies Euclidean normalization to tf-idf scores of the document
+        :return: Counter of tf-idf scores for each term
+        """
+        tfidfs = {
+            term: self.get_tfidf(term, document_name) for term, freq in self.corpus.items()
+            if freq.get(document_name, '')
+        }
+
+        if l2_norm:
+            normalization = np.linalg.norm(list(tfidfs.values()), axis=0)
+            for key, value in tfidfs.items():
+                tfidfs[key] = value / normalization
+
+        return Counter(tfidfs)
+
+    def get_top_terms(self, document_name, num_terms=30):
+        """Get the top terms for a given document by tf-idf score.
+
+        :param document_name: string indicating document's name in the corpus - should exist in self.document_list
+        :param num_terms: number of top terms to return (30 by default)
+        :return: dict of top terms and their corresponding tf-idf scores
+        """
+        tfidfs = self.get_document_tfidfs(document_name)
+        sorted_tfidfs = sorted(
+            filter(self.noise_filter, tfidfs.items())
+            ,key=operator.itemgetter(1), reverse=True)
+        return OrderedDict(sorted_tfidfs[:num_terms])
+
+    def noise_filter(self, item_to_filter):
+        if len(item_to_filter[0])<5\
+                and not (item_to_filter[0][0]).isdigit()\
+                and str(item_to_filter[0]).isascii() :
+            return True
+        else:
+            return False
+
+    def build_feature_matrix(self, tfidf=True):
+        """Transforms the corpus into a scikit-learn vectorizer object which can be used for machine learning.
+        Used to set the object attributes self.vectorizer and self.feature_matrix.
+
+        :param tfidf (bool): if True, applies TfidfTransformer to vectorized features
+        :return: scikit-learn vectorizer, scipy sparse feature matrix and its corresponding document labels
+        """
+
+        train_data = [self.get_document(document) for document in self.document_list]
+        labels = self.document_list
+        vectorizer = DictVectorizer()
+        feature_matrix = vectorizer.fit_transform(train_data)
+
+        self.tfidf_transformer = None
+        if tfidf:
+            self.tfidf_transformer = TfidfTransformer()
+            feature_matrix = self.tfidf_transformer.fit_transform(feature_matrix)
+
+        self.vectorizer = vectorizer
+        self.feature_matrix = feature_matrix
+        return feature_matrix, labels, vectorizer
+
+    def train_classifier(self, classifier_type='LinearSVC', tfidf=True):
+        """Trains a document classifier using the vocabulary and documents contained in the corpus. Uses scikit-learn.
+
+        :param classifier_type (str): 'LinearSVC' or 'MultinomialNB' (LinearSVC by default)
+        :param tfidf (bool): if True, applies TfidfTransformer to vectorized features
+        :return: classifier object
+        """
+        self.build_feature_matrix(tfidf=tfidf)
+
+        if classifier_type.lower() == 'linearsvc':
+            classifier = OneVsRestClassifier(LinearSVC(random_state=0))
+        elif classifier_type.lower() == 'multinomialnb':
+            classifier = OneVsRestClassifier(MultinomialNB())
+        else:
+            raise Exception("Parameter classifier_type only accepts 'MultinomialNB', 'BernoulliNB' or 'LinearSVC'.")
+
+        classifier.fit(self.feature_matrix, self.document_list)
+        self.classifier = classifier
+        return classifier
+
+    def classify_document(self, document):
+        """Classifies an input document using a bag-of-words approach with sparse features.
+
+        :param document (dict): dict or Counter of the form {'word1': freq1, 'word2': freq2, ...}
+        :return (str): label corresponding to the document's classification
+        """
+        test_data = self.vectorizer.transform([document])
+        if self.tfidf_transformer:
+            test_data = self.tfidf_transformer.transform(test_data)
+
+        return self.classifier.predict(test_data)
+
+    def count_words_from_list(self, document_name, word_list, normalize=True):
+        """Given a list of input words, return the counts of these words in a specified document."""
+        document = self.get_document(document_name)
+        word_counts = [document[word] for word in word_list]
+        total_count = sum(word_counts)
+        if normalize:
+            total_count /= self.document_lengths[document_name]
+
+        return total_count
+
+    def get_mean_word_length(self, document_name, upper_limit=12):
+        """Get the average word length for all words in a given document."""
+        document = self.get_document(document_name)
+        return sum([len(term) * freq for term, freq in document.items()
+                    if len(term) <= upper_limit]) / sum(document.values())
+
+    @staticmethod
+    def check_corpus_path(corpus_path):
+        if not corpus_path.lower().endswith('.json'):
+            raise Exception('corpus_path provided is not a valid JSON file.')
+        make_path(corpus_path)
+
+
+def make_path(path):
+    """Check if path exists. If it doesn't, create the necessary folders."""
+
+    # Remove file name from path
+    base_name = os.path.basename(path)
+    if '.' in base_name:
+        path = path[:-len(base_name)]
+
+    if not os.path.exists(path):
+        try:
+            os.makedirs(path)
+        except OSError as exception:
+            if exception.errno != errno.EEXIST:
+                raise
+
+    return path
+
+
+def get_word_corpora():
+    """Returns a list of paths to all word corpora installed in the module."""
+    application_root = get_root_dir()
+    words_dir = os.path.join(application_root, 'words')
+    return os.listdir(words_dir)
+
+
+def get_root_dir():
+    return os.path.dirname(__file__)
