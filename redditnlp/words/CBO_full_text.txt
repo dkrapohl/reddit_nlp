@@ -1,0 +1,27 @@
+corn
+soybeans
+wheat
+oats
+rice
+soybean oil
+soybean meal
+live cattle
+feeder cattle
+lean hogs
+crude oil
+heating oil
+unleaded gas
+natural gas
+ethanol
+gold
+silver
+platinum
+palladium
+copper
+cocoa
+coffee
+sugar
+milk
+cotton
+orange juice
+lumber

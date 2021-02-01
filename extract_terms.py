@@ -27,7 +27,7 @@ with open(all_tickers, 'r') as tickers_file:
     all_tickers = set([word.strip('\n') for word in tickers_file.readlines()])
 
 def ticker_filter(item_to_filter):
-    if item_to_filter in all_tickers:
+    if str(item_to_filter).upper() in all_tickers:
         return True
     else:
         return False
@@ -85,29 +85,15 @@ def save_subreddit_term_summary(corpus, num_terms=500):
 def save_subreddit_top_terms(corpus, num_terms=500):
     # Save the top terms for each subreddit in a text file
     save_path = os.path.join(SAVE_DIR, 'top_words.txt')
-    summary_path = os.path.join(SAVE_DIR, 'summarized_top_words.txt')
-    summary = Counter()
     for document in corpus.get_document_list():
         top_terms = corpus.get_top_terms(document, num_terms)
         top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
-        # tt_counter = Counter(top_terms)
-        # summary = summary + tt_counter
         with open(save_path, 'a', encoding="utf-8") as f:
             f.write(
                 document +  #.encode('utf-8') +
                 '\n' +
                  '\n'.join(['{0}, {1}'.format(term.encode('utf-8'), weight) for term, weight in top_terms]) +
                  '\n\n')
-
-    # sum(corpus.corpus.get('reddit').values())
-    top_terms = corpus.get_top_terms('summary', num_terms)
-    top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
-
-    with open(summary_path, 'a', encoding="utf-8") as f:
-        f.write(
-            'summary\n' +
-             '\n'.join(['{0},{1}'.format(term,weight) for term,weight in top_terms]) +
-             '\n\n')
     return save_path
 
 def save_subreddit_tickers(corpus):

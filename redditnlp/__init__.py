@@ -459,6 +459,20 @@ class TfidfCorpus(object):
             term: freqs[document_name] for term, freqs in self.corpus.items() if freqs.get(document_name, 0)
         })
 
+    def document_exists(self, document_name):
+        if document_name in self.document_list:
+            print("Document with name '{0}' already exists in corpus."
+                  "Do you wish to replace it?".format(document_name))
+            while True:
+                replace_doc = input("Response (y/n): ")
+                if replace_doc in ['y', 'yes', 'ye']:
+                    self.delete_document(document_name)
+                    break
+                elif replace_doc in ['n', 'no']:
+                    return
+                else:
+                    print('Could not interpret response. Try again.')
+
     def add_document(self, document, document_name):
         """Load a document into the corpus.
 
@@ -558,6 +572,23 @@ class TfidfCorpus(object):
         tfidfs = self.get_document_tfidfs(document_name)
         sorted_tfidfs = sorted(
             filter(self.noise_filter, tfidfs.items())
+            ,key=operator.itemgetter(1), reverse=True)
+        return OrderedDict(sorted_tfidfs[:num_terms])
+
+    def get_all_terms(self, num_terms=30):
+        """Get the top terms for a given document by tf-idf score.
+
+        :param document_name: string indicating document's name in the corpus - should exist in self.document_list
+        :param num_terms: number of top terms to return (30 by default)
+        :return: dict of top terms and their corresponding tf-idf scores
+        """
+        all_dict={}
+        for document in self.get_document_list():
+            tfidfs = self.get_document_tfidfs(document)
+            all_dict.update(tfidfs)
+
+        sorted_tfidfs = sorted(
+            filter(self.noise_filter, all_dict.items())
             ,key=operator.itemgetter(1), reverse=True)
         return OrderedDict(sorted_tfidfs[:num_terms])
 
