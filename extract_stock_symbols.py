@@ -171,9 +171,9 @@ for subreddit, frequency in word_lengths.items():
 #######################
 
 # Collect the comments for a particular user and determine which subreddit their comments best match up with
-counter = RedditWordCounter(USERNAME, CLIENT_SECRET)
-corpus = TfidfCorpus(os.path.join(SAVE_DIR, CORPUS_FILE))
+#counter = RedditWordCounter(USERNAME, CLIENT_SECRET)
+#corpus = TfidfCorpus(os.path.join(SAVE_DIR, CORPUS_FILE))
 
-user_comments = counter.user_comments('DeepFuckingValue')
-corpus.train_classifier(classifier_type='LinearSVC', tfidf=True)
-print(corpus.classify_document(user_comments))
+#user_comments = counter.user_comments('DFV')
+#corpus.train_classifier(classifier_type='LinearSVC', tfidf=True)
+#print(corpus.classify_document(user_comments))

@@ -48,7 +48,7 @@ def get_subreddit_vocabularies():
         subreddit = subreddit_queue.popleft()
 
         try:
-            vocabulary = reddit_counter.subreddit_comments_new(subreddit, limit=COMMENTS_PER_SUBREDDIT)
+            vocabulary = reddit_counter.subreddit_comments_hot(subreddit, limit=COMMENTS_PER_SUBREDDIT)
         except urllib.error.HTTPError as err:
             print (err)
             # Add subreddit back into queue
@@ -71,7 +71,7 @@ def get_subreddit_vocabularies():
     return comment_corpus, corpus_path
 
 def save_subreddit_term_summary(corpus, num_terms=500):
-    summary_path = os.path.join(SAVE_DIR, 'summarized_top_words.txt')
+    summary_path = os.path.join(SAVE_DIR, 'summarized_top_hot_words.txt')
     top_terms = corpus.get_all_terms(num_terms)
     top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
 
@@ -84,7 +84,7 @@ def save_subreddit_term_summary(corpus, num_terms=500):
 
 def save_subreddit_top_terms(corpus, num_terms=500):
     # Save the top terms for each subreddit in a text file
-    save_path = os.path.join(SAVE_DIR, 'top_words.txt')
+    save_path = os.path.join(SAVE_DIR, 'top_hot_words.txt')
     for document in corpus.get_document_list():
         top_terms = corpus.get_top_terms(document, num_terms)
         top_terms = sorted(top_terms.items(), key=lambda x: x[1], reverse=True)
